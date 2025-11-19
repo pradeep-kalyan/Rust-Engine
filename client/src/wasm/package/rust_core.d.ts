@@ -1,15 +1,28 @@
 /* tslint:disable */
 /* eslint-disable */
-export function greet(): string;
-export function add(a: number, b: number): number;
+/**
+ * ------------------------------------------------------------------
+ *   Filter stored Arrow batches
+ * ------------------------------------------------------------------
+ */
+export function aggregate(col: string, op: string, threshold: number): Uint8Array;
+/**
+ * ------------------------------------------------------------------
+ *   CSV → Arrow IPC → store schema + batches
+ * ------------------------------------------------------------------
+ */
+export function csvtoarrow(bytes: Uint8Array): Uint8Array;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
   readonly memory: WebAssembly.Memory;
-  readonly greet: () => [number, number];
-  readonly add: (a: number, b: number) => number;
+  readonly aggregate: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+  readonly csvtoarrow: (a: number, b: number) => [number, number, number, number];
   readonly __wbindgen_externrefs: WebAssembly.Table;
+  readonly __wbindgen_malloc: (a: number, b: number) => number;
+  readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+  readonly __externref_table_dealloc: (a: number) => void;
   readonly __wbindgen_free: (a: number, b: number, c: number) => void;
   readonly __wbindgen_start: () => void;
 }
