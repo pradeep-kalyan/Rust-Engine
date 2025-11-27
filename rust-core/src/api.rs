@@ -53,15 +53,16 @@ pub fn get_meta_data_async() -> js_sys::Promise {
 }
 
 /// Async version of get_data with a structured response envelope
+/// Returns { columns: [...], rowCount: number } instead of IPC bytes
 #[wasm_bindgen]
 pub fn get_data_async(query_json: String) -> js_sys::Promise {
     future_to_promise(async move {
         let (result, duration) = measure(|| get_data(&query_json));
 
         match result {
-            Ok(bytes) => {
-                let array = js_sys::Uint8Array::from(&bytes[..]);
-                Ok(build_response(array.into(), true, "", duration))
+            Ok(data_obj) => {
+                // data_obj is already a JS object with { columns, rowCount }
+                Ok(build_response(data_obj, true, "", duration))
             }
             Err(_) => Ok(build_response(JsValue::NULL, false, "get_data failed", duration)),
         }

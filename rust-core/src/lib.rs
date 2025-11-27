@@ -20,7 +20,7 @@ mod types;
 
 // Imports from modules
 use error::{js_err, js_err_arrow};
-use helpers::{encode_ipc, to_simple_type};
+use helpers::{to_simple_type, combine_batches, extract_column_buffers};
 use query_types::DataQuery;
 use storage::{STORED_BATCHES, STORED_SCHEMA};
 
@@ -176,24 +176,14 @@ pub(crate) fn get_meta_data() -> Result<JsValue, JsValue> {
 
 
 /// Advanced get_data with filters, sorting, and pivot support
-pub(crate) fn get_data(query_json: &str) -> Result<Vec<u8>, JsValue> {
+/// Returns a JS object with { columns: [...], rowCount: number }
+pub(crate) fn get_data(query_json: &str) -> Result<JsValue, JsValue> {
 	// Parse query JSON
 	let query: DataQuery = serde_json::from_str(query_json)
 			.map_err(|e| js_err(&format!("Invalid query JSON: {}", e)))?;
 
-    // Fast path: No operations at all - return cached IPC
-    let has_operations = query.filters.is_some() 
-        || query.sort.is_some() 
-        || query.limit.is_some() 
-        || query.offset.is_some() 
-        || query.pivot.is_some()
-        || query.columns.is_some();
-    
-    if !has_operations {
-        if let Some(ref cached) = *storage::CACHED_IPC.lock().unwrap() {
-            return Ok(cached.clone());
-        }
-    }
+    // Note: Fast path cache removed since we're returning column buffers
+    // Caching would need to cache the JS objects, which is not efficient
 
     // Load stored data (single lock acquisition per store)
     let schema = STORED_SCHEMA
@@ -222,7 +212,17 @@ pub(crate) fn get_data(query_json: &str) -> Result<Vec<u8>, JsValue> {
         let limit = query.limit;
         let result = apply_limit_offset_borrow(stored_batches, offset, limit)?;
         drop(batches_ref);
-        return encode_ipc(&schema, &result);
+        
+        // Combine and extract buffers
+        let combined_batch = combine_batches(&schema, &result)?;
+        let columns = extract_column_buffers(&combined_batch)?;
+        let row_count = combined_batch.num_rows();
+        
+        let response = js_sys::Object::new();
+        js_sys::Reflect::set(&response, &"columns".into(), &columns)?;
+        js_sys::Reflect::set(&response, &"rowCount".into(), &JsValue::from_f64(row_count as f64))?;
+        
+        return Ok(response.into());
     }
     
     let mut batches = stored_batches.clone();
@@ -291,13 +291,24 @@ pub(crate) fn get_data(query_json: &str) -> Result<Vec<u8>, JsValue> {
 		batches = apply_limit_offset(batches, query.limit, query.offset)?;
 	}
 
-	// Encode to IPC
+	// NEW: Combine batches and extract column buffers (zero-copy)
 	let final_schema = if batches.is_empty() {
 		schema
 	} else {
 		batches[0].schema()
 	};
-	encode_ipc(&final_schema, &batches)
+	
+	let combined_batch = combine_batches(&final_schema, &batches)?;
+	
+	// Create response object with columns and metadata
+	let columns = extract_column_buffers(&combined_batch)?;
+	let row_count = combined_batch.num_rows();
+	
+	let response = js_sys::Object::new();
+	js_sys::Reflect::set(&response, &"columns".into(), &columns)?;
+	js_sys::Reflect::set(&response, &"rowCount".into(), &JsValue::from_f64(row_count as f64))?;
+	
+	Ok(response.into())
 }
 
 /// Apply limit and offset by borrowing slices without cloning batches (fast path)

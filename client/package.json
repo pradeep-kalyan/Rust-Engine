@@ -18,6 +18,7 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@tailwindcss/vite": "^4.1.17",
+    "@tanstack/react-virtual": "^3.13.12",
     "apache-arrow": "^21.1.0",
     "chart.js": "^4.5.1",
     "class-variance-authority": "^0.7.1",
@@ -28,7 +29,6 @@
     "react-chartjs-2": "^5.3.1",
     "react-dom": "^18.3.1",
     "react-fields-keeper": "^4.13.4",
-    "react-window": "^2.2.3",
     "tailwind-merge": "^3.4.0",
     "tailwindcss": "^4.1.17",
     "zustand": "^5.0.8"

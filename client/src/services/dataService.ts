@@ -1,5 +1,19 @@
-import { tableFromIPC, Table } from 'apache-arrow';
-import type { Row, TableData } from '../types';
+import {
+    Vector,
+    makeData,
+    makeVector,
+    Int8,
+    Int16,
+    Int32,
+    Int64,
+    Float32,
+    Float64,
+    Bool,
+    Utf8,
+    DateMillisecond,
+    TimestampMillisecond,
+} from 'apache-arrow';
+import type { Row, TableData, ArrowColumnBuffer, ColumnBufferResponse } from '../types';
 import type { IGetMetaDataResponse, IColumnMeta } from '../types/metadata';
 import { rustTypeToDataType } from '../types/metadata';
 import type { IFieldsKeeperItem } from 'react-fields-keeper';
@@ -51,6 +65,132 @@ export interface DataQuery {
 }
 
 /**
+ * Reconstruct Arrow Vector from raw column buffers (zero-copy)
+ */
+function reconstructArrowColumn(buffer: ArrowColumnBuffer): Vector {
+    const { dataType, length, nullCount, nullBitmap, offsets, values } = buffer;
+
+    const nullBitmapArray = nullBitmap ? new Uint8Array(nullBitmap) : null;
+
+    switch (dataType) {
+        case 'Int8':
+            return makeVector(
+                makeData({
+                    type: new Int8(),
+                    length,
+                    nullCount,
+                    nullBitmap: nullBitmapArray,
+                    data: new Int8Array(values),
+                }),
+            );
+
+        case 'Int16':
+            return makeVector(
+                makeData({
+                    type: new Int16(),
+                    length,
+                    nullCount,
+                    nullBitmap: nullBitmapArray,
+                    data: new Int16Array(values),
+                }),
+            );
+
+        case 'Int32':
+            return makeVector(
+                makeData({
+                    type: new Int32(),
+                    length,
+                    nullCount,
+                    nullBitmap: nullBitmapArray,
+                    data: new Int32Array(values),
+                }),
+            );
+
+        case 'Int64':
+            return makeVector(
+                makeData({
+                    type: new Int64(),
+                    length,
+                    nullCount,
+                    nullBitmap: nullBitmapArray,
+                    data: new BigInt64Array(values),
+                }),
+            );
+
+        case 'Float32':
+            return makeVector(
+                makeData({
+                    type: new Float32(),
+                    length,
+                    nullCount,
+                    nullBitmap: nullBitmapArray,
+                    data: new Float32Array(values),
+                }),
+            );
+
+        case 'Float64':
+            return makeVector(
+                makeData({
+                    type: new Float64(),
+                    length,
+                    nullCount,
+                    nullBitmap: nullBitmapArray,
+                    data: new Float64Array(values),
+                }),
+            );
+
+        case 'Boolean':
+            return makeVector(
+                makeData({
+                    type: new Bool(),
+                    length,
+                    nullCount,
+                    nullBitmap: nullBitmapArray,
+                    data: new Uint8Array(values),
+                }),
+            );
+
+        case 'Utf8':
+            if (!offsets) throw new Error('Utf8 column requires offsets buffer');
+            return makeVector(
+                makeData({
+                    type: new Utf8(),
+                    length,
+                    nullCount,
+                    nullBitmap: nullBitmapArray,
+                    valueOffsets: new Int32Array(offsets),
+                    data: new Uint8Array(values),
+                }),
+            );
+
+        case 'Date':
+            return makeVector(
+                makeData({
+                    type: new DateMillisecond(),
+                    length,
+                    nullCount,
+                    nullBitmap: nullBitmapArray,
+                    data: new Int32Array(values),
+                }),
+            );
+
+        case 'Timestamp':
+            return makeVector(
+                makeData({
+                    type: new TimestampMillisecond(),
+                    length,
+                    nullCount,
+                    nullBitmap: nullBitmapArray,
+                    data: new BigInt64Array(values),
+                }),
+            );
+
+        default:
+            throw new Error(`Unsupported data type: ${dataType}`);
+    }
+}
+
+/**
  * DataService - Professional singleton service for data operations
  *
  * Responsibilities:
@@ -60,7 +200,7 @@ export interface DataQuery {
  * 4. Data retrieval with pivot/filter support
  * 5. Store integration for status updates
  *
- * NO CACHING - Data lives in Rust Worker, metadata fetched on demand
+ * NEW: Stores Arrow Vectors (columnar) instead of JS row objects
  * All heavy operations run off the main thread to prevent UI freezes
  */
 class DataService {
@@ -70,7 +210,11 @@ class DataService {
 
     // Store metadata from Rust (not data!)
     private metadata: IGetMetaDataResponse | null = null;
-    private resultData: TableData = { rows: [], columns: [] };
+
+    // NEW: Columnar storage with Arrow Vectors
+    private resultColumns: Map<string, Vector> = new Map();
+    private resultSchema: { name: string; type: string }[] = [];
+    private rowCount: number = 0;
 
     private constructor() {}
 
@@ -194,6 +338,7 @@ class DataService {
     /**
      * Advanced query with filters, sorting, and pivot
      * Runs in Web Worker to prevent UI freezes
+     * NEW: Uses columnar buffers instead of IPC for zero-copy performance
      */
     getData(query: DataQuery): void {
         const store = useStore.getState();
@@ -204,38 +349,44 @@ class DataService {
         const queryJson = JSON.stringify(query);
         const dataResponse = this.workerClient.getData(queryJson);
 
-        const startTime = performance.now();
-
-        console.log(`[DataService] Query started at ${startTime}`);
+        const mainThreadStart = performance.now();
 
         dataResponse
             .then((response) => {
                 if (!response.success) throw new Error(response.message || 'Failed to get data');
 
-                const table: Table = tableFromIPC(response.data);
+                // NEW: response.data is { columns: ArrowColumnBuffer[], rowCount: number }
+                const bufferResponse = response.data as unknown as ColumnBufferResponse;
 
-                // Parse to TableData format
-                const colNames = table.schema.fields.map((f) => f.name);
-                const parsedRows: Row[] = [];
+                const reconstructStart = performance.now();
 
-                for (let i = 0; i < table.numRows; i++) {
-                    const row: Row = {};
-                    for (const col of colNames) {
-                        const colVector = table.getChild(col);
-                        row[col] = colVector?.get(i) ?? null;
-                    }
-                    parsedRows.push(row);
+                // Reconstruct Arrow Vectors (zero-copy, instant)
+                this.resultColumns.clear();
+                this.resultSchema = [];
+                this.rowCount = bufferResponse.rowCount;
+
+                for (const colBuffer of bufferResponse.columns) {
+                    const vector = reconstructArrowColumn(colBuffer);
+                    this.resultColumns.set(colBuffer.name, vector);
+                    this.resultSchema.push({
+                        name: colBuffer.name,
+                        type: colBuffer.dataType,
+                    });
                 }
 
-                this.resultData = { rows: parsedRows, columns: colNames };
-                const endTime = performance.now();
-                console.log(`[DataService] Received at ${endTime}ms`);
-                const timeTaken = endTime - startTime;
-                console.log(`[DataService] Query processed in ${timeTaken}ms`);
+                const reconstructTime = performance.now() - reconstructStart;
+                const totalMainThreadTime = performance.now() - mainThreadStart;
+
+                // Log timing breakdown
+                console.log(`[DataService] ✓ Query complete`);
+                console.log(`  ├─ Worker processing: ${response.timeTaken.toFixed(2)}ms`);
+                console.log(`  ├─ JS reconstruction: ${reconstructTime.toFixed(2)}ms`);
+                console.log(`  └─ Total (main thread): ${totalMainThreadTime.toFixed(2)}ms`);
+                console.log(`[DataService] Rows: ${this.rowCount.toLocaleString()}, Columns: ${this.resultSchema.length}`);
 
                 const timing: TimingLog = {
                     operation: 'Processing Query',
-                    duration_ms: response.timeTaken,
+                    duration_ms: totalMainThreadTime,
                 };
                 store.setLatestTiming(timing);
                 store.setProcessingStatus('success');
@@ -277,9 +428,61 @@ class DataService {
 
     /**
      * Get current result data (cached after last getData call)
+     * DEPRECATED: Use getRowCount(), getColumnNames(), and getCell() instead
      */
     getCurrentData(): TableData {
-        return this.resultData;
+        // For backward compatibility, materialize a subset of rows
+        // But this defeats the purpose of columnar storage!
+        console.warn('[DataService] getCurrentData() is deprecated. Use columnar access methods.');
+
+        const columns = this.resultSchema.map((c) => c.name);
+        const rows: Row[] = [];
+
+        // Only materialize first 1000 rows to avoid memory issues
+        const maxRows = Math.min(this.rowCount, 1000);
+
+        for (let i = 0; i < maxRows; i++) {
+            const row: Row = {};
+            for (const col of columns) {
+                row[col] = this.getCell(i, col);
+            }
+            rows.push(row);
+        }
+
+        return { rows, columns };
+    }
+
+    /**
+     * Get cell value by row and column (zero-copy columnar access)
+     */
+    getCell(rowIndex: number, columnName: string): any {
+        const vector = this.resultColumns.get(columnName);
+        if (!vector) return null;
+
+        if (rowIndex < 0 || rowIndex >= this.rowCount) return null;
+
+        return vector.get(rowIndex);
+    }
+
+    /**
+     * Get number of rows in result set
+     */
+    getRowCount(): number {
+        return this.rowCount;
+    }
+
+    /**
+     * Get column names in result set
+     */
+    getColumnNames(): string[] {
+        return this.resultSchema.map((c) => c.name);
+    }
+
+    /**
+     * Get column schema
+     */
+    getColumnSchema(): { name: string; type: string }[] {
+        return [...this.resultSchema];
     }
 
     /**
@@ -359,7 +562,9 @@ class DataService {
             { id: 'columns', items: [] },
             { id: 'values', items: [] },
         ]);
-        this.resultData = { rows: [], columns: [] };
+        this.resultColumns.clear();
+        this.resultSchema = [];
+        this.rowCount = 0;
         store.incrementTableRenderCounter();
     }
 
@@ -368,7 +573,9 @@ class DataService {
      */
     reset(): void {
         this.metadata = null;
-        this.resultData = { rows: [], columns: [] };
+        this.resultColumns.clear();
+        this.resultSchema = [];
+        this.rowCount = 0;
         const store = useStore.getState();
         store.resetStore();
     }

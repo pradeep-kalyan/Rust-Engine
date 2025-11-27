@@ -271,7 +271,24 @@ export function seed_chunk(chunk_bytes, has_header) {
 }
 
 /**
+ * Clear the timing log
+ */
+export function clear_timing_log() {
+    wasm.clear_timing_log();
+}
+
+/**
+ * Get all timing log entries
+ * @returns {any}
+ */
+export function get_timing_log() {
+    const ret = wasm.get_timing_log();
+    return ret;
+}
+
+/**
  * Async version of get_data with a structured response envelope
+ * Returns { columns: [...], rowCount: number } instead of IPC bytes
  * @param {string} query_json
  * @returns {Promise<any>}
  */
@@ -312,22 +329,6 @@ export function seed_async(bytes) {
     const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
     const ret = wasm.seed_async(ptr0, len0);
-    return ret;
-}
-
-/**
- * Clear the timing log
- */
-export function clear_timing_log() {
-    wasm.clear_timing_log();
-}
-
-/**
- * Get all timing log entries
- * @returns {any}
- */
-export function get_timing_log() {
-    const ret = wasm.get_timing_log();
     return ret;
 }
 
@@ -398,6 +399,10 @@ function __wbg_get_imports() {
     imports.wbg.__wbg__wbg_cb_unref_2454a539ea5790d9 = function(arg0) {
         arg0._wbg_cb_unref();
     };
+    imports.wbg.__wbg_buffer_ccc4520b36d3ccf4 = function(arg0) {
+        const ret = arg0.buffer;
+        return ret;
+    };
     imports.wbg.__wbg_call_525440f72fbfc0ea = function() { return handleError(function (arg0, arg1, arg2) {
         const ret = arg0.call(arg1, arg2);
         return ret;
@@ -448,6 +453,10 @@ function __wbg_get_imports() {
         const ret = Date.now();
         return ret;
     };
+    imports.wbg.__wbg_push_df81a39d04db858c = function(arg0, arg1) {
+        const ret = arg0.push(arg1);
+        return ret;
+    };
     imports.wbg.__wbg_queueMicrotask_34d692c25c47d05b = function(arg0) {
         const ret = arg0.queueMicrotask;
         return ret;
@@ -486,14 +495,14 @@ function __wbg_get_imports() {
         const ret = arg0.then(arg1);
         return ret;
     };
+    imports.wbg.__wbindgen_cast_082b59175ee14e1d = function(arg0, arg1) {
+        // Cast intrinsic for `Closure(Closure { dtor_idx: 815, function: Function { arguments: [Externref], shim_idx: 816, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+        const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__h56051a08f764ac79, wasm_bindgen__convert__closures_____invoke__h31f9d501116eaee8);
+        return ret;
+    };
     imports.wbg.__wbindgen_cast_2241b6af4c4b2941 = function(arg0, arg1) {
         // Cast intrinsic for `Ref(String) -> Externref`.
         const ret = getStringFromWasm0(arg0, arg1);
-        return ret;
-    };
-    imports.wbg.__wbindgen_cast_56beab93bba8a39d = function(arg0, arg1) {
-        // Cast intrinsic for `Closure(Closure { dtor_idx: 859, function: Function { arguments: [Externref], shim_idx: 860, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen__closure__destroy__h56051a08f764ac79, wasm_bindgen__convert__closures_____invoke__h31f9d501116eaee8);
         return ret;
     };
     imports.wbg.__wbindgen_cast_d6cd19b81560fd6e = function(arg0) {
